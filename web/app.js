@@ -29,6 +29,13 @@ function settings() {
   if (!s.weights) s.weights = Object.fromEntries(RARITIES.map((r) => [r, RARITY_INFO[r].weight]));
   if (s.sound === undefined) s.sound = true;
   if (s.perCategory === undefined) s.perCategory = 1;
+  const au = s.audio || (s.audio = {});
+  if (au.master === undefined) au.master = 0.8;
+  if (au.buildVol === undefined) au.buildVol = 0.8;
+  if (au.revealVol === undefined) au.revealVol = 0.9;
+  if (!au.buildup) au.buildup = 'riser';
+  if (!au.reveal) au.reveal = Object.fromEntries(RARITIES.map((r) => [r, 'chime']));
+  if (!au.files) au.files = {}; // slot ('buildup' | rarity) -> { file, name }
   return s;
 }
 const weightOf = (rarity) => Math.max(0, Number(settings().weights[rarity]) || 0);
@@ -52,9 +59,60 @@ function saveLibrary() {
   saveChain = saveChain.then(() => api('PUT', '/api/library', snapshot, true)).catch((e) => toast('Save failed: ' + e.message));
   return saveChain;
 }
-async function uploadImage(file) {
-  const res = await api('POST', '/api/images?name=' + encodeURIComponent(file.name), file, true);
+async function uploadFile(blob, name) {
+  const res = await api('POST', '/api/images?name=' + encodeURIComponent(name), blob, true);
   return res.file;
+}
+// Downscale an image so the app never has to decode full HD originals.
+// Returns null for formats that should be kept as-is (GIF animations, SVG).
+async function shrinkImage(blob, max) {
+  if (/gif|svg/i.test(blob.type)) return null;
+  const bmp = await createImageBitmap(blob);
+  const k = Math.min(1, max / Math.max(bmp.width, bmp.height));
+  const c = document.createElement('canvas');
+  c.width = Math.max(1, Math.round(bmp.width * k)); c.height = Math.max(1, Math.round(bmp.height * k));
+  const g = c.getContext('2d');
+  g.imageSmoothingQuality = 'high';
+  g.drawImage(bmp, 0, 0, c.width, c.height);
+  bmp.close && bmp.close();
+  let out = await new Promise((r) => c.toBlob(r, 'image/webp', 0.88));
+  let ext = '.webp';
+  if (!out || out.type !== 'image/webp') { out = await new Promise((r) => c.toBlob(r, 'image/jpeg', 0.9)); ext = '.jpg'; }
+  return { blob: out, ext };
+}
+const FULL_SIZE = 1024, THUMB_SIZE = 320;
+// Store a display-sized copy (for reveals) and a small thumbnail (for grids).
+async function uploadImage(file) {
+  const full = await shrinkImage(file, FULL_SIZE);
+  if (!full) { const f = await uploadFile(file, file.name || 'image.gif'); return { image: f, thumb: f }; }
+  const thumb = await shrinkImage(file, THUMB_SIZE);
+  const [image, th] = await Promise.all([uploadFile(full.blob, 'full' + full.ext), uploadFile(thumb.blob, 'thumb' + thumb.ext)]);
+  return { image, thumb: th };
+}
+// One-time pass for entries added before thumbnails existed.
+async function optimizeExistingImages() {
+  const todo = library.collections.flatMap((c) => c.categories.flatMap((k) => k.entries)).filter((e) => e.image && !e.thumb);
+  if (!todo.length) return;
+  toast(`Optimizing ${todo.length} image${todo.length === 1 ? '' : 's'}…`);
+  for (const e of todo) {
+    try {
+      const blob = await (await fetch(imgURL(e.image))).blob();
+      const name = e.image;
+      const res = await uploadImage(new File([blob], name, { type: blob.type }));
+      e.image = res.image; e.thumb = res.thumb;
+    } catch (err) { e.thumb = e.image; }
+  }
+  saveLibrary();
+  if (session) session.claimed.forEach(refreshSnapshot);
+  if (!G.el || G.phase === 'idle') render();
+  toast('Images optimized.');
+}
+// Refresh image refs on result/claim snapshots from the live entry.
+function refreshSnapshot(item) {
+  const coll = getCollection(item.collectionId) || getCollection();
+  const hit = coll && findEntry(coll, item.entryId);
+  if (hit) { item.image = hit.entry.image || null; item.thumb = hit.entry.thumb || null; }
+  return item;
 }
 const imgURL = (file) => '/img/' + encodeURIComponent(file);
 
@@ -70,8 +128,9 @@ function findEntry(coll, entryId) {
   return null;
 }
 
-function artHTML(item, cls = '') {
-  if (item.image) return `<img src="${imgURL(item.image)}" alt="" draggable="false" class="${cls}">`;
+function artHTML(item, size = 'thumb') {
+  const file = size === 'full' ? item.image : (item.thumb || item.image);
+  if (file) return `<img src="${imgURL(file)}" alt="" draggable="false" decoding="async"${size === 'full' ? '' : ' loading="lazy"'}>`;
   const c = RARITY_INFO[item.rarity]?.color || '#888';
   const letter = esc((item.name || '?').trim().charAt(0).toUpperCase() || '?');
   return `<div class="placeholder" style="background:radial-gradient(circle at 30% 25%, ${c}66, ${c}11 70%)">${letter}</div>`;
@@ -92,6 +151,7 @@ let modalResolve = null;
 function openModal(html, onMount) {
   const wrap = $('#modal');
   const box = $('.modal', wrap);
+  box._cleanup && box._cleanup(); box._cleanup = null;
   box.innerHTML = html;
   wrap.classList.remove('hidden');
   return new Promise((resolve) => {
@@ -102,8 +162,10 @@ function openModal(html, onMount) {
   });
 }
 function closeModal(value) {
+  const box = $('#modal .modal');
+  box._cleanup && box._cleanup(); box._cleanup = null;
   $('#modal').classList.add('hidden');
-  $('#modal .modal').innerHTML = '';
+  box.innerHTML = '';
   const r = modalResolve;
   modalResolve = null;
   r && r(value);
@@ -303,6 +365,7 @@ function renderCollection() {
           <span>No repeats${session.noRepeat ? ` <span class="session-tag">(${session.drawn.length} drawn)</span>` : ''}</span>
         </label>
         <label class="switch"><input type="checkbox" id="sound" ${s.sound ? 'checked' : ''}><span class="track"></span><span>Sound</span></label>
+        <input type="range" id="masterVol" min="0" max="100" value="${pct(s.audio.master)}" title="Master volume" class="mini-range">
         <div class="spacer"></div>
         <button class="btn primary" data-act="add-category">＋ Category</button>
       </div>
@@ -323,6 +386,8 @@ function renderCollection() {
     render();
   };
   $('#sound').onchange = (e) => { s.sound = e.target.checked; saveLibrary(); };
+  $('#masterVol').oninput = (e) => { s.audio.master = e.target.value / 100; SFX.setMaster(s.audio.master); };
+  $('#masterVol').onchange = () => saveLibrary();
   $('#perCat').onchange = (e) => { s.perCategory = clampCount(e.target.value); e.target.value = s.perCategory; saveLibrary(); };
   app.querySelectorAll('[data-cat-count]').forEach((inp) => {
     inp.onchange = () => { const c = coll.categories.find((x) => x.id === inp.dataset.catCount); c._pullCount = clampCount(inp.value); inp.value = c._pullCount; };
@@ -373,7 +438,7 @@ const clampCount = (v) => Math.max(1, Math.min(100, Math.floor(Number(v)) || 1))
 /* ---------------------------- Entry editor ---------------------------- */
 function editEntry(cat, entry) {
   const isNew = !entry;
-  const draft = entry ? { ...entry } : { id: uid(), name: '', rarity: 'common', image: null };
+  const draft = entry ? { ...entry } : { id: uid(), name: '', rarity: 'common', image: null, thumb: null };
   const rarityOpts = RARITIES.map((r) => `<label class="r-${r}"><input type="radio" name="rarity" value="${r}" ${draft.rarity === r ? 'checked' : ''}><span class="opt">${RARITY_INFO[r].label}</span></label>`).join('');
   openModal(`
     <h2>${isNew ? 'New entry' : 'Edit entry'} <span class="session-tag">in ${esc(cat.name)}</span></h2>
@@ -396,16 +461,16 @@ function editEntry(cat, entry) {
       </div>
     </form>`, (box, close) => {
     const preview = box.querySelector('.preview');
-    const showPreview = () => { preview.innerHTML = draft.image ? `<img src="${imgURL(draft.image)}">` : 'No image'; box.querySelector('[data-remove-img]').disabled = !draft.image; };
+    const showPreview = () => { preview.innerHTML = draft.image ? `<img src="${imgURL(draft.thumb || draft.image)}">` : 'No image'; box.querySelector('[data-remove-img]').disabled = !draft.image; };
     showPreview();
     box.querySelector('input[type=file]').onchange = async (e) => {
       const f = e.target.files[0];
       if (!f) return;
       preview.textContent = 'Uploading…';
-      try { draft.image = await uploadImage(f); } catch (err) { toast('Image upload failed: ' + err.message); }
+      try { Object.assign(draft, await uploadImage(f)); } catch (err) { toast('Image upload failed: ' + err.message); }
       showPreview();
     };
-    box.querySelector('[data-remove-img]').onclick = () => { draft.image = null; showPreview(); };
+    box.querySelector('[data-remove-img]').onclick = () => { draft.image = null; draft.thumb = null; showPreview(); };
     box.querySelector('[data-cancel]').onclick = () => close(null);
     const del = box.querySelector('[data-del]');
     if (del) del.onclick = () => {
@@ -426,20 +491,106 @@ function editEntry(cat, entry) {
 }
 
 /* ---------------------------- Settings ---------------------------- */
+function soundSelect(slot, current, presets) {
+  const opts = Object.entries(presets).map(([id, p]) => `<option value="${id}" ${current === id ? 'selected' : ''}>${esc(p.label)}</option>`).join('');
+  return `<select data-snd="${slot}">${opts}<option value="custom" ${current === 'custom' ? 'selected' : ''}>Custom file…</option></select>`;
+}
+function customFileUI(slot) {
+  const f = settings().audio.files[slot];
+  return `<span class="custom-file" data-custom="${slot}">
+    <label class="btn small">${f ? '↺' : 'Choose…'}<input type="file" accept="audio/*,.mp3,.wav,.ogg,.m4a" hidden data-file="${slot}"></label>
+    <span class="session-tag" title="${esc(f?.name || '')}">${esc(f?.name || 'no file')}</span></span>`;
+}
+const pct = (x) => Math.round(x * 100);
+
 function openSettings() {
-  const s = settings();
-  const rows = () => {
+  const s = settings(), au = s.audio;
+  const weightRows = () => {
     const total = RARITIES.reduce((n, r) => n + weightOf(r), 0);
     return RARITIES.map((r) => `<span class="rlabel r-${r}">${RARITY_INFO[r].label}</span>
       <input type="number" min="0" max="10000" step="any" data-w="${r}" value="${s.weights[r]}" style="width:90px">
       <span class="pct" data-pct="${r}">${total ? fmtPct((weightOf(r) / total) * 100) : '—'}</span>`).join('');
   };
+  const slider = (key, label) => `<label class="vol-row"><span>${label}</span>
+    <input type="range" min="0" max="100" value="${pct(au[key])}" data-vol="${key}"><span class="vol-val">${pct(au[key])}%</span></label>`;
+  const revealRows = RARITIES.map((r) => `
+    <div class="snd-row"><span class="rlabel r-${r}">${RARITY_INFO[r].label}</span>
+      ${soundSelect(r, au.reveal[r], SFX.REVEALS)}
+      <button class="btn small icon" data-preview="${r}" title="Preview build-up + reveal">▶</button>
+      ${customFileUI(r)}</div>`).join('');
+
   openModal(`
     <h2>⚙ Settings</h2>
-    <p class="session-tag" style="margin-top:0">Rarity weights decide how likely each entry is to be drawn. An entry's chance is its rarity's weight divided by the total weight of all entries in its category. The percentage shown is for a category containing one entry of each rarity.</p>
-    <div class="weights">${rows()}</div>
-    <div class="actions"><button class="btn ghost" data-reset style="margin-right:auto">Reset defaults</button><button class="btn primary" data-done>Done</button></div>`,
+    <h3 class="set-h">🔊 Sound</h3>
+    <label class="switch" style="margin-bottom:12px"><input type="checkbox" data-enable ${s.sound ? 'checked' : ''}><span class="track"></span><span>Sound effects</span></label>
+    ${slider('master', 'Master volume')}
+    ${slider('buildVol', 'Build-up volume')}
+    ${slider('revealVol', 'Reveal volume')}
+    <div class="set-sub">Build-up sound <span class="session-tag">— plays while the orb charges</span></div>
+    <div class="snd-row"><span class="session-tag">All rarities</span>${soundSelect('buildup', au.buildup, SFX.BUILDUPS)}
+      <button class="btn small icon" data-preview="buildup" title="Preview">▶</button>${customFileUI('buildup')}</div>
+    <div class="set-sub">Reveal sound <span class="session-tag">— per rarity; every preset gets bigger for rarer pulls</span></div>
+    <div class="snd-row"><span class="session-tag">Set all to</span>
+      <select data-all><option value="">—</option>${Object.entries(SFX.REVEALS).map(([id, p]) => `<option value="${id}">${esc(p.label)}</option>`).join('')}</select>
+      <button class="btn small ghost" data-surprise>🎲 Mix it up</button></div>
+    ${revealRows}
+    <h3 class="set-h">🎲 Rarity weights</h3>
+    <p class="session-tag" style="margin-top:0">An entry's chance is its rarity's weight divided by the total weight of all entries in its category. The percentage shown is for a category containing one entry of each rarity.</p>
+    <div class="weights">${weightRows()}</div>
+    <div class="actions"><button class="btn ghost" data-reset style="margin-right:auto">Reset weights</button><button class="btn primary" data-done>Done</button></div>`,
   (box, close) => {
+    box.parentElement.classList.add('wide');
+    const syncCustom = () => box.querySelectorAll('[data-snd]').forEach((sel) => {
+      box.querySelector(`[data-custom="${sel.dataset.snd}"]`).classList.toggle('hidden', sel.value !== 'custom');
+    });
+    syncCustom();
+    box.querySelector('[data-enable]').onchange = (e) => { s.sound = e.target.checked; };
+    box.querySelectorAll('[data-vol]').forEach((inp) => {
+      inp.oninput = () => { au[inp.dataset.vol] = inp.value / 100; inp.nextElementSibling.textContent = inp.value + '%'; if (inp.dataset.vol === 'master') SFX.setMaster(au.master); };
+    });
+    box.querySelectorAll('[data-snd]').forEach((sel) => {
+      sel.onchange = () => {
+        if (sel.dataset.snd === 'buildup') au.buildup = sel.value; else au.reveal[sel.dataset.snd] = sel.value;
+        syncCustom();
+      };
+    });
+    box.querySelector('[data-all]').onchange = (e) => {
+      if (!e.target.value) return;
+      RARITIES.forEach((r) => { au.reveal[r] = e.target.value; box.querySelector(`[data-snd="${r}"]`).value = e.target.value; });
+      e.target.value = ''; syncCustom();
+    };
+    box.querySelector('[data-surprise]').onclick = () => {
+      const ids = Object.keys(SFX.REVEALS).filter((id) => id !== 'none');
+      RARITIES.forEach((r) => { au.reveal[r] = ids[Math.floor(Math.random() * ids.length)]; box.querySelector(`[data-snd="${r}"]`).value = au.reveal[r]; });
+      syncCustom();
+    };
+    box.querySelectorAll('[data-file]').forEach((inp) => {
+      inp.onchange = async () => {
+        const f = inp.files[0];
+        if (!f) return;
+        try {
+          const file = await uploadFile(f, f.name);
+          au.files[inp.dataset.file] = { file, name: f.name };
+          SFX.preload(file);
+          const wrap = box.querySelector(`[data-custom="${inp.dataset.file}"] .session-tag`);
+          wrap.textContent = f.name; wrap.title = f.name;
+        } catch (err) { toast('Could not use that file: ' + err.message); }
+      };
+    });
+    let stopPrev = [];
+    box.querySelectorAll('[data-preview]').forEach((b) => {
+      b.onclick = () => {
+        stopPrev.forEach((f) => f()); stopPrev = [];
+        if (!s.sound) { toast('Sound effects are turned off.'); return; }
+        const slot = b.dataset.preview;
+        if (slot === 'buildup') { stopPrev.push(SFX.buildup(soundCfg('build'), RARITY_INFO.legendary.build, 3)); return; }
+        const rank = RARITIES.indexOf(slot), ms = Math.min(RARITY_INFO[slot].build, 2000);
+        const stop = SFX.buildup(soundCfg('build'), ms, rank);
+        stopPrev.push(stop);
+        const t = setTimeout(() => { stop(); stopPrev.push(SFX.reveal(soundCfg('reveal', slot), rank)); }, ms);
+        stopPrev.push(() => clearTimeout(t));
+      };
+    });
     const refresh = () => {
       const total = RARITIES.reduce((n, r) => n + weightOf(r), 0);
       RARITIES.forEach((r) => { box.querySelector(`[data-pct="${r}"]`).textContent = total ? fmtPct((weightOf(r) / total) * 100) : '—'; });
@@ -450,7 +601,8 @@ function openSettings() {
       refresh();
     };
     box.querySelector('[data-done]').onclick = () => close(true);
-  }).then(() => { saveLibrary(); render(); });
+    box._cleanup = () => stopPrev.forEach((f) => f());
+  }).then(() => { $('#modal').classList.remove('wide'); saveLibrary(); render(); });
 }
 
 /* ---------------------------- Save / load sessions ---------------------------- */
@@ -489,7 +641,7 @@ async function openLoadSession(collectionId) {
     box.querySelector('[data-close]').onclick = () => close(null);
     box.querySelectorAll('[data-load]').forEach((b) => b.onclick = () => {
       const x = list.find((s) => s.id === b.dataset.load);
-      const restored = { id: x.id, name: x.name, collectionId: x.collectionId, noRepeat: !!x.noRepeat, drawn: x.drawn || [], claimed: x.claimed || [] };
+      const restored = { id: x.id, name: x.name, collectionId: x.collectionId, noRepeat: !!x.noRepeat, drawn: x.drawn || [], claimed: (x.claimed || []).map((c) => refreshSnapshot({ ...c, collectionId: x.collectionId })) };
       close(null);
       openCollection(x.collectionId, restored);
       toast(`Loaded session “${x.name}”.`);
@@ -529,7 +681,7 @@ function drawResults(plan) {
       if (session.noRepeat) { excluded.add(e.id); session.drawn.push(e.id); }
       results.push({
         uid: uid(), entryId: e.id, categoryId: cat.id, categoryName: cat.name,
-        name: e.name, rarity: e.rarity, image: e.image || null,
+        name: e.name, rarity: e.rarity, image: e.image || null, thumb: e.thumb || null,
       });
     }
   }
@@ -545,58 +697,23 @@ function toggleClaim(r) {
 /* ======================================================================
    Sound (Web Audio synth — no files needed)
    ====================================================================== */
-let actx = null;
-function audio() {
-  if (!settings().sound) return null;
-  try { actx = actx || new (window.AudioContext || window.webkitAudioContext)(); } catch { return null; }
-  if (actx.state === 'suspended') actx.resume();
-  return actx;
-}
-function sfxRiser(ms, rarity) {
-  const a = audio(); if (!a) return () => {};
-  const t = a.currentTime, d = ms / 1000;
-  const o = a.createOscillator(), o2 = a.createOscillator(), g = a.createGain(), f = a.createBiquadFilter();
-  o.type = 'sawtooth'; o2.type = 'triangle';
-  const top = { common: 500, uncommon: 650, rare: 850, legendary: 1100, exotic: 1500 }[rarity];
-  o.frequency.setValueAtTime(90, t); o.frequency.exponentialRampToValueAtTime(top, t + d);
-  o2.frequency.setValueAtTime(45, t); o2.frequency.exponentialRampToValueAtTime(top / 2, t + d);
-  f.type = 'lowpass'; f.frequency.setValueAtTime(300, t); f.frequency.exponentialRampToValueAtTime(4000, t + d);
-  g.gain.setValueAtTime(0.0001, t); g.gain.exponentialRampToValueAtTime(0.12, t + d * 0.9);
-  o.connect(f); o2.connect(f); f.connect(g); g.connect(a.destination);
-  o.start(t); o2.start(t);
-  const stop = () => { try { const n = a.currentTime; g.gain.cancelScheduledValues(n); g.gain.setValueAtTime(g.gain.value, n); g.gain.exponentialRampToValueAtTime(0.0001, n + 0.08); o.stop(n + 0.1); o2.stop(n + 0.1); } catch {} };
-  return stop;
-}
-function sfxReveal(rarity) {
-  const a = audio(); if (!a) return;
-  const t = a.currentTime;
-  const chords = {
-    common: [523], uncommon: [523, 659], rare: [523, 659, 784],
-    legendary: [523, 659, 784, 1047, 1319], exotic: [392, 523, 659, 784, 1047, 1319, 1568, 2093],
-  }[rarity];
-  // impact thump
-  const th = a.createOscillator(), tg = a.createGain();
-  th.type = 'sine'; th.frequency.setValueAtTime(160, t); th.frequency.exponentialRampToValueAtTime(40, t + 0.4);
-  tg.gain.setValueAtTime(0.35, t); tg.gain.exponentialRampToValueAtTime(0.0001, t + 0.5);
-  th.connect(tg); tg.connect(a.destination); th.start(t); th.stop(t + 0.5);
-  const step = rarity === 'exotic' ? 0.07 : 0.09;
-  chords.forEach((hz, i) => {
-    const o = a.createOscillator(), g = a.createGain();
-    o.type = i % 2 ? 'triangle' : 'sine'; o.frequency.value = hz;
-    const s = t + 0.05 + i * step, len = rarity === 'common' ? 0.5 : 1.6;
-    g.gain.setValueAtTime(0.0001, s); g.gain.exponentialRampToValueAtTime(0.09, s + 0.02); g.gain.exponentialRampToValueAtTime(0.0001, s + len);
-    o.connect(g); g.connect(a.destination); o.start(s); o.stop(s + len + 0.05);
-  });
+function soundCfg(kind, rarity) {
+  const s = settings(), au = s.audio;
+  const slot = kind === 'build' ? 'buildup' : rarity;
+  const id = kind === 'build' ? au.buildup : au.reveal[rarity];
+  return { enabled: s.sound, master: au.master, volume: kind === 'build' ? au.buildVol : au.revealVol, id, file: au.files[slot]?.file };
 }
 
 /* ======================================================================
    Particle FX on canvas
    ====================================================================== */
+const DPR = Math.min(window.devicePixelRatio || 1, 1.25);
+const MAX_PARTS = 700;
 const fx = {
   canvas: null, ctx: null, parts: [], raf: 0, mode: null, color: '#fff', rainbow: false, emitInward: 0, rainConfetti: 0,
   init() {
     this.canvas = $('#fx'); this.ctx = this.canvas.getContext('2d');
-    const resize = () => { this.canvas.width = innerWidth * devicePixelRatio; this.canvas.height = innerHeight * devicePixelRatio; };
+    const resize = () => { this.canvas.width = innerWidth * DPR; this.canvas.height = innerHeight * DPR; };
     addEventListener('resize', resize); resize();
   },
   start() { if (!this.raf) this.raf = requestAnimationFrame(() => this.tick()); },
@@ -607,37 +724,39 @@ const fx = {
     for (let i = 0; i < n; i++) {
       const ang = Math.random() * Math.PI * 2, dist = Math.max(W, H) * (0.45 + Math.random() * 0.3);
       const x = cx + Math.cos(ang) * dist, y = cy + Math.sin(ang) * dist;
-      const sp = (8 + Math.random() * 10) * devicePixelRatio;
-      this.parts.push({ x, y, vx: -Math.cos(ang) * sp, vy: -Math.sin(ang) * sp, life: dist / sp, max: dist / sp, size: (1 + Math.random() * 2.5) * devicePixelRatio, color: this.col(), streak: true });
+      const sp = (8 + Math.random() * 10) * DPR;
+      this.parts.push({ x, y, vx: -Math.cos(ang) * sp, vy: -Math.sin(ang) * sp, life: dist / sp, max: dist / sp, size: (1 + Math.random() * 2.5) * DPR, color: this.col(), streak: true });
     }
   },
   burst(n, power = 1) {
     const cx = this.canvas.width / 2, cy = this.canvas.height / 2;
     for (let i = 0; i < n; i++) {
-      const ang = Math.random() * Math.PI * 2, sp = (4 + Math.random() * 16 * power) * devicePixelRatio;
-      this.parts.push({ x: cx, y: cy, vx: Math.cos(ang) * sp, vy: Math.sin(ang) * sp, life: 50 + Math.random() * 60, max: 110, size: (2 + Math.random() * 4) * devicePixelRatio, color: this.col(), drag: 0.95, grav: 0.12 * devicePixelRatio, spark: true });
+      const ang = Math.random() * Math.PI * 2, sp = (4 + Math.random() * 16 * power) * DPR;
+      this.parts.push({ x: cx, y: cy, vx: Math.cos(ang) * sp, vy: Math.sin(ang) * sp, life: 50 + Math.random() * 60, max: 110, size: (2 + Math.random() * 4) * DPR, color: this.col(), drag: 0.95, grav: 0.12 * DPR, spark: true });
     }
   },
   firework() {
     const W = this.canvas.width, H = this.canvas.height;
     const x = W * (0.15 + Math.random() * 0.7), y = H * (0.15 + Math.random() * 0.5), c = this.col();
     for (let i = 0; i < 50; i++) {
-      const ang = (i / 50) * Math.PI * 2, sp = (3 + Math.random() * 3) * devicePixelRatio;
-      this.parts.push({ x, y, vx: Math.cos(ang) * sp, vy: Math.sin(ang) * sp, life: 60 + Math.random() * 30, max: 90, size: 2.2 * devicePixelRatio, color: this.rainbow ? this.col() : c, drag: 0.96, grav: 0.05 * devicePixelRatio, spark: true });
+      const ang = (i / 50) * Math.PI * 2, sp = (3 + Math.random() * 3) * DPR;
+      this.parts.push({ x, y, vx: Math.cos(ang) * sp, vy: Math.sin(ang) * sp, life: 60 + Math.random() * 30, max: 90, size: 2.2 * DPR, color: this.rainbow ? this.col() : c, drag: 0.96, grav: 0.05 * DPR, spark: true });
     }
   },
   confetti(n) {
     const W = this.canvas.width;
     for (let i = 0; i < n; i++) {
-      this.parts.push({ x: Math.random() * W, y: -20, vx: (Math.random() - 0.5) * 3, vy: (2 + Math.random() * 3) * devicePixelRatio, life: 400, max: 400, size: (4 + Math.random() * 5) * devicePixelRatio, color: `hsl(${Math.random() * 360},100%,62%)`, rot: Math.random() * 6, vr: (Math.random() - 0.5) * 0.3, confetti: true });
+      this.parts.push({ x: Math.random() * W, y: -20, vx: (Math.random() - 0.5) * 3, vy: (2 + Math.random() * 3) * DPR, life: 400, max: 400, size: (4 + Math.random() * 5) * DPR, color: `hsl(${Math.random() * 360},100%,62%)`, rot: Math.random() * 6, vr: (Math.random() - 0.5) * 0.3, confetti: true });
     }
   },
   tick() {
     const { ctx, canvas } = this;
     ctx.clearRect(0, 0, canvas.width, canvas.height);
-    if (this.emitInward) this.inward(this.emitInward);
-    if (this.rainConfetti && Math.random() < this.rainConfetti) this.confetti(2);
-    if (this.fireworks && Math.random() < this.fireworks) this.firework();
+    if (this.parts.length < MAX_PARTS) {
+      if (this.emitInward) this.inward(this.emitInward);
+      if (this.rainConfetti && Math.random() < this.rainConfetti) this.confetti(2);
+      if (this.fireworks && Math.random() < this.fireworks) this.firework();
+    }
     ctx.globalCompositeOperation = 'lighter';
     const next = [];
     for (const p of this.parts) {
@@ -689,6 +808,7 @@ function startPull(plan, title) {
   if (shortfall) toast(`${shortfall} pull${shortfall === 1 ? '' : 's'} skipped — not enough undrawn entries left.`, 4000);
   G.results = results; G.index = 0; G.title = title; G.plan = plan;
   G.el.classList.remove('hidden');
+  document.body.classList.add('gacha-open');
   fx.start();
   playCurrent();
 }
@@ -726,7 +846,9 @@ async function playCurrent() {
   // Stage 1: everyone starts with a white glow. Rarer pulls escalate through the rarity colors.
   setGlow('#ffffff');
   fx.emitInward = 1;
-  G.stopRiser = sfxRiser(info.build, r.rarity);
+  G.stopReveal && G.stopReveal(); G.stopReveal = null;
+  G.stopRiser = SFX.buildup(soundCfg('build'), info.build, rank);
+  if (r.image) { const im = new Image(); im.src = imgURL(r.image); im.decode && im.decode().catch(() => {}); }
   const ladder = RARITIES.slice(1, rank + 1); // colors to step through
   const stepTime = info.build * 0.75 / Math.max(1, ladder.length);
   const myIndex = G.index;
@@ -763,7 +885,7 @@ function reveal() {
 
   const flash = $('.g-flash', el);
   flash.classList.remove('go'); void flash.offsetWidth; flash.classList.add('go');
-  sfxReveal(r.rarity);
+  G.stopReveal = SFX.reveal(soundCfg('reveal', r.rarity), rank);
 
   // Effects scale with rarity.
   fx.burst([30, 60, 110, 180, 300][rank], [0.6, 0.8, 1, 1.3, 1.6][rank]);
@@ -776,7 +898,7 @@ function reveal() {
   card.innerHTML = `
     <div class="shine"></div>
     ${dupCount ? `<div class="dup">Duplicate ×${dupCount + 1}</div>` : ''}
-    <div class="art">${artHTML(r)}</div>
+    <div class="art">${artHTML(r, 'full')}</div>
     <div class="cat">${esc(r.categoryName)}</div>
     <div class="nm">${esc(r.name)}</div>
     <div class="stars">${Array.from({ length: info.stars }, (_, i) => `<span style="animation-delay:${0.45 + i * 0.13}s">★</span>`).join('')}</div>
@@ -806,6 +928,7 @@ function finishPull() {
   clearTimers();
   G.stopRiser && G.stopRiser(); G.stopRiser = null;
   G.phase = 'idle';
+  document.body.classList.remove('gacha-open');
   G.el.classList.add('hidden');
   G.el.classList.remove('building', 'shake', 'rainbow', 'r-exotic-reveal');
   $('.g-rays', G.el).classList.remove('on');
@@ -902,4 +1025,5 @@ function initGacha() {
   } catch (e) { toast('Could not load library: ' + e.message, 6000); }
   settings();
   render();
+  optimizeExistingImages();
 })();

@@ -112,7 +112,7 @@ func newHandler() http.Handler {
 		}
 	})
 
-	// Upload an image: raw bytes in the body, original file name in ?name=.
+	// Upload an image or sound file: raw bytes in the body, original file name in ?name=.
 	mux.HandleFunc("/api/images", func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodPost {
 			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
@@ -120,9 +120,10 @@ func newHandler() http.Handler {
 		}
 		ext := strings.ToLower(filepath.Ext(r.URL.Query().Get("name")))
 		switch ext {
-		case ".png", ".jpg", ".jpeg", ".gif", ".webp", ".bmp", ".svg":
+		case ".png", ".jpg", ".jpeg", ".gif", ".webp", ".bmp", ".svg", ".avif",
+			".mp3", ".wav", ".ogg", ".oga", ".m4a", ".aac", ".flac", ".webm":
 		default:
-			http.Error(w, "unsupported image type", http.StatusBadRequest)
+			http.Error(w, "unsupported file type", http.StatusBadRequest)
 			return
 		}
 		data, err := io.ReadAll(io.LimitReader(r.Body, 50<<20))
@@ -145,6 +146,8 @@ func newHandler() http.Handler {
 			http.NotFound(w, r)
 			return
 		}
+		// File names are random and never reused, so they can be cached forever.
+		w.Header().Set("Cache-Control", "public, max-age=31536000, immutable")
 		http.ServeFile(w, r, filepath.Join(imagesDir, name))
 	})
 

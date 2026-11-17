@@ -18,10 +18,13 @@
 }
 * { box-sizing: border-box; }
 html, body { margin: 0; height: 100%; }
-body {
+body::before {
+  content: ""; position: fixed; inset: 0; z-index: -1; pointer-events: none;
   background: radial-gradient(1200px 700px at 80% -10%, #2a2160 0%, transparent 60%),
               radial-gradient(900px 600px at -10% 110%, #123a55 0%, transparent 55%), var(--bg);
-  background-attachment: fixed;
+}
+body {
+  background: var(--bg);
   color: var(--text);
   font-family: "Segoe UI", system-ui, -apple-system, Roboto, sans-serif;
   font-size: 14px;
@@ -62,7 +65,7 @@ label.switch input:checked + .track::after { left: 19px; }
 /* ---------- Layout ---------- */
 .topbar {
   display: flex; align-items: center; gap: 12px; padding: 14px 22px; border-bottom: 1px solid var(--line);
-  background: #0e0f1acc; backdrop-filter: blur(8px); position: sticky; top: 0; z-index: 5; flex-wrap: wrap;
+  background: #0e0f1af2; position: sticky; top: 0; z-index: 5; flex-wrap: wrap;
 }
 .topbar h1 { font-size: 20px; }
 .logo { font-size: 22px; font-weight: 800; letter-spacing: .5px; background: linear-gradient(90deg, #a99bff, #5ee1ff); -webkit-background-clip: text; background-clip: text; color: transparent; }
@@ -140,7 +143,7 @@ label.switch input:checked + .track::after { left: 19px; }
 .claimed-item .txt .sub { font-size: 11px; color: var(--muted); }
 
 /* ---------- Modal ---------- */
-.modal-wrap { position: fixed; inset: 0; background: #05060cc0; display: flex; align-items: center; justify-content: center; z-index: 50; backdrop-filter: blur(3px); }
+.modal-wrap { position: fixed; inset: 0; background: #05060cc0; display: flex; align-items: center; justify-content: center; z-index: 50; }
 .modal { background: var(--panel); border: 1px solid var(--line); border-radius: 18px; padding: 22px; width: min(520px, calc(100vw - 32px)); max-height: calc(100vh - 40px); overflow-y: auto; box-shadow: 0 20px 60px #000a; animation: pop .18s ease-out; }
 .modal h2 { font-size: 19px; margin-bottom: 14px; }
 .modal .field { margin-bottom: 14px; display: flex; flex-direction: column; gap: 6px; }
@@ -205,11 +208,11 @@ label.switch input:checked + .track::after { left: 19px; }
 .g-flash.go { animation: flash .7s ease-out; }
 @keyframes flash { 0% { opacity: 0; } 12% { opacity: 1; } 100% { opacity: 0; } }
 
-.g-rays { position: absolute; left: 50%; top: 50%; width: 220vmax; height: 220vmax; margin: -110vmax 0 0 -110vmax; opacity: 0; z-index: 1; pointer-events: none;
+.g-rays { position: absolute; left: 50%; top: 50%; width: 150vmax; height: 150vmax; margin: -75vmax 0 0 -75vmax; opacity: 0; z-index: 1; pointer-events: none;
   background: repeating-conic-gradient(from 0deg, color-mix(in srgb, var(--gc) 45%, transparent) 0deg 6deg, transparent 6deg 18deg);
   -webkit-mask: radial-gradient(circle, #000 0%, transparent 45%); mask: radial-gradient(circle, #000 0%, transparent 45%);
   transition: opacity .6s; }
-.g-rays.on { opacity: 1; animation: spin 18s linear infinite; }
+.g-rays.on { opacity: 1; animation: spin 18s linear infinite; will-change: transform; }
 .gacha.r-exotic-reveal .g-rays { background: repeating-conic-gradient(from 0deg, #ff4f6d88 0deg 6deg, transparent 6deg 12deg, #ffb62788 12deg 18deg, transparent 18deg 24deg, #4fe08a88 24deg 30deg, transparent 30deg 36deg, #3fa3ff88 36deg 42deg, transparent 42deg 48deg, #a46bff88 48deg 54deg, transparent 54deg 60deg); }
 
 .g-card {
@@ -242,7 +245,7 @@ label.switch input:checked + .track::after { left: 19px; }
 @keyframes sweep { 0% { left: -120%; } 50%, 100% { left: 160%; } }
 
 /* ---------- Summary ---------- */
-.summary { position: fixed; inset: 0; z-index: 40; background: #07081198; backdrop-filter: blur(10px); overflow-y: auto; animation: pop .25s; }
+.summary { position: fixed; inset: 0; z-index: 40; background: #080912f2; overflow-y: auto; animation: pop .25s; }
 .summary .inner { max-width: 1200px; margin: 0 auto; padding: 28px 22px 60px; }
 .summary .s-head { display: flex; align-items: center; gap: 12px; margin-bottom: 18px; flex-wrap: wrap; }
 .summary .s-head h1 { font-size: 26px; }
@@ -258,3 +261,21 @@ label.switch input:checked + .track::after { left: 19px; }
 .s-card .info { padding: 8px 10px; display: flex; flex-direction: column; gap: 6px; }
 .s-card .name { font-weight: 700; word-break: break-word; }
 .s-card .claim-btn { width: 100%; }
+
+/* Don't paint the page underneath while the full-screen pull is running. */
+body.gacha-open #app { visibility: hidden; }
+.entries { content-visibility: auto; contain-intrinsic-size: auto 300px; }
+
+/* Settings */
+.modal-wrap.wide .modal { width: min(680px, calc(100vw - 32px)); }
+.set-h { font-size: 15px; margin: 18px 0 10px; padding-top: 14px; border-top: 1px solid var(--line); }
+.set-h:first-of-type { border-top: 0; padding-top: 0; margin-top: 4px; }
+.set-sub { margin: 16px 0 8px; font-weight: 600; }
+.vol-row { display: grid; grid-template-columns: 130px 1fr 48px; align-items: center; gap: 10px; margin-bottom: 8px; }
+.vol-val { color: var(--muted); text-align: right; font-variant-numeric: tabular-nums; }
+.snd-row { display: grid; grid-template-columns: 90px 170px auto 1fr; align-items: center; gap: 8px; margin-bottom: 6px; }
+.snd-row select { width: 100%; }
+.custom-file { display: flex; align-items: center; gap: 6px; min-width: 0; }
+.custom-file .session-tag { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+input[type=range] { accent-color: var(--accent); width: 100%; }
+.mini-range { width: 90px !important; }

@@ -16,6 +16,8 @@ Requires Windows 10/11 with the Microsoft Edge WebView2 Runtime, which is alread
   - During a reveal: click / Space / Enter to reveal or go to the next result, **C** to claim, Esc to skip to the results page.
 - **No repeats** stops an entry from being drawn more than once in the current session. Turning it on or off resets the list of drawn entries, and so does reopening the collection.
 - **Claim** any result (during the reveal or on the results page) to keep it in the ★ Claimed panel while you keep pulling.
+- **Sound** (⚙ Settings): master, build-up and reveal volume sliders (master is also in the collection toolbar). Pick from 10 build-up sounds and 11 reveal sounds — each one scales up for rarer pulls — choose a different reveal sound per rarity, or use your own audio file (mp3, wav, ogg, m4a, …) for any of them. ▶ previews a sound.
+- **Images** are downscaled when added (1024px for reveals, 320px thumbnails), so large HD images don't slow the app down. Images added with older versions are converted automatically on first launch.
 - **Save session / Load session** stores the no-repeats setting, the list of drawn entries and your claimed results under a name, so you can pick up where you left off.
 
 Data lives in `%APPDATA%\Randomizer` (`library.json`, `images\`, `sessions\`).
