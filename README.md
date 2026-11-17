@@ -4,6 +4,8 @@ A small Windows app for building collections and pulling random entries from the
 
 **Download:** [`dist/Randomizer.exe`](dist/Randomizer.exe) — a single portable file, no installer. Double-click to run.
 
+**Android:** [`dist/Randomizer.apk`](dist/Randomizer.apk) — see [Installing on Android](#installing-on-android).
+
 Requires Windows 10/11 with the Microsoft Edge WebView2 Runtime, which is already installed on nearly all Windows 10/11 machines. If it's missing, the app opens in your default browser instead.
 
 ## Using it
@@ -22,6 +24,16 @@ Requires Windows 10/11 with the Microsoft Edge WebView2 Runtime, which is alread
 
 Data lives in `%APPDATA%\Randomizer` (`library.json`, `images\`, `sessions\`).
 
+## Installing on Android
+
+Works on Android 7.0 and newer.
+
+1. Copy `Randomizer.apk` to the phone (download it, email it to yourself, or USB).
+2. Open it from the Files / Downloads app. Android will ask to allow installs from that app — allow it once, then tap **Install**.
+3. Google Play Protect may warn that the app is from an unknown developer — choose **Install anyway**.
+
+The phone app keeps its own data on the phone (it doesn't sync with the PC version). Uninstalling the app deletes its collections. Installing a newer `Randomizer.apk` over the old one keeps your data. The phone's Back button closes dialogs, skips a pull, or returns to the collection list.
+
 ## Building
 
 Requires Go 1.24+. Cross-compiles from any OS:
@@ -31,3 +43,11 @@ GOOS=windows GOARCH=amd64 CGO_ENABLED=0 go build -trimpath -ldflags "-s -w -H wi
 ```
 
 On Linux/macOS, `go run .` starts the same UI at http://127.0.0.1:8765 for development.
+
+Android APK (no Gradle; needs JDK 17+ and the Android SDK with `platforms;android-34` and `build-tools;35.0.0`):
+
+```bash
+ANDROID_HOME=~/android-sdk android/build.sh
+```
+
+The APK is signed with `android/release.keystore` (password `randomizer`). Keep using the same keystore so new builds install as updates over old ones.

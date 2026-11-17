@@ -1,2 +1,4 @@
 winres/
 *.syso
+android/build/
+*.idsig

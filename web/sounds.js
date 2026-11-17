@@ -282,7 +282,7 @@ const SFX = (() => {
 
   async function fileBuffer(file) {
     if (!fileCache.has(file)) {
-      fileCache.set(file, fetch('/img/' + encodeURIComponent(file)).then((r) => r.arrayBuffer()).then((b) => a.decodeAudioData(b)).catch(() => null));
+      fileCache.set(file, fetch(imgURL(file)).then((r) => r.arrayBuffer()).then((b) => a.decodeAudioData(b)).catch(() => null));
     }
     return fileCache.get(file);
   }

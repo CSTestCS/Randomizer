@@ -44,6 +44,7 @@ const weightOf = (rarity) => Math.max(0, Number(settings().weights[rarity]) || 0
    Server API
    ====================================================================== */
 async function api(method, path, body, raw) {
+  if (LOCAL_MODE) return LocalStore.request(method, path, body);
   const opts = { method, headers: {} };
   if (body !== undefined) {
     if (raw) opts.body = body;
@@ -114,7 +115,7 @@ function refreshSnapshot(item) {
   if (hit) { item.image = hit.entry.image || null; item.thumb = hit.entry.thumb || null; }
   return item;
 }
-const imgURL = (file) => '/img/' + encodeURIComponent(file);
+const imgURL = (file) => (LOCAL_MODE ? LocalStore.url(file) : '/img/' + encodeURIComponent(file));
 
 /* ======================================================================
    Helpers: lookups
@@ -232,8 +233,8 @@ function renderHome() {
     <div class="topbar">
       <div class="logo">✦ Randomizer</div>
       <div class="spacer"></div>
-      <button class="btn" data-act="load-session">📂 Load session</button>
-      <button class="btn" data-act="settings">⚙ Settings</button>
+      <button class="btn" data-act="load-session">📂<span class="btn-label"> Load session</span></button>
+      <button class="btn" data-act="settings">⚙<span class="btn-label"> Settings</span></button>
       <button class="btn primary" data-act="new-collection">＋ New collection</button>
     </div>
     <div class="page">
@@ -343,13 +344,13 @@ function renderCollection() {
 
   app.innerHTML = `
     <div class="topbar">
-      <button class="btn ghost" data-act="home">◀ Collections</button>
+      <button class="btn ghost" data-act="home">◀<span class="btn-label"> Collections</span></button>
       <h1>${esc(coll.name)}</h1>
       <button class="btn small icon" data-act="rename" title="Rename collection">✎</button>
       <div class="spacer"></div>
       <span class="session-tag">${session.name ? `Session: <b>${esc(session.name)}</b>` : 'Unsaved session'}</span>
-      <button class="btn" data-act="save-session">💾 Save session</button>
-      <button class="btn" data-act="load-session">📂 Load session</button>
+      <button class="btn" data-act="save-session">💾<span class="btn-label"> Save session</span></button>
+      <button class="btn" data-act="load-session">📂<span class="btn-label"> Load session</span></button>
       <button class="btn" data-act="settings">⚙</button>
     </div>
     <div class="page">
@@ -707,8 +708,11 @@ function soundCfg(kind, rarity) {
 /* ======================================================================
    Particle FX on canvas
    ====================================================================== */
-const DPR = Math.min(window.devicePixelRatio || 1, 1.25);
-const MAX_PARTS = 700;
+// Phones and low-end machines get fewer particles at lower resolution.
+const LITE = LOCAL_MODE || matchMedia('(max-width: 700px)').matches || (navigator.hardwareConcurrency || 8) <= 4;
+const DPR = Math.min(window.devicePixelRatio || 1, LITE ? 1 : 1.25);
+const MAX_PARTS = LITE ? 260 : 700;
+const PK = LITE ? 0.45 : 1; // particle count multiplier
 const fx = {
   canvas: null, ctx: null, parts: [], raf: 0, mode: null, color: '#fff', rainbow: false, emitInward: 0, rainConfetti: 0,
   init() {
@@ -720,6 +724,7 @@ const fx = {
   stop() { cancelAnimationFrame(this.raf); this.raf = 0; this.parts = []; this.emitInward = 0; this.rainConfetti = 0; this.ctx.clearRect(0, 0, this.canvas.width, this.canvas.height); },
   col() { return this.rainbow ? `hsl(${Math.random() * 360},100%,65%)` : this.color; },
   inward(n) {
+    n = Math.max(1, Math.round(n * PK));
     const W = this.canvas.width, H = this.canvas.height, cx = W / 2, cy = H / 2;
     for (let i = 0; i < n; i++) {
       const ang = Math.random() * Math.PI * 2, dist = Math.max(W, H) * (0.45 + Math.random() * 0.3);
@@ -729,6 +734,7 @@ const fx = {
     }
   },
   burst(n, power = 1) {
+    n = Math.round(n * PK);
     const cx = this.canvas.width / 2, cy = this.canvas.height / 2;
     for (let i = 0; i < n; i++) {
       const ang = Math.random() * Math.PI * 2, sp = (4 + Math.random() * 16 * power) * DPR;
@@ -738,12 +744,14 @@ const fx = {
   firework() {
     const W = this.canvas.width, H = this.canvas.height;
     const x = W * (0.15 + Math.random() * 0.7), y = H * (0.15 + Math.random() * 0.5), c = this.col();
-    for (let i = 0; i < 50; i++) {
-      const ang = (i / 50) * Math.PI * 2, sp = (3 + Math.random() * 3) * DPR;
+    const n = LITE ? 24 : 50;
+    for (let i = 0; i < n; i++) {
+      const ang = (i / n) * Math.PI * 2, sp = (3 + Math.random() * 3) * DPR;
       this.parts.push({ x, y, vx: Math.cos(ang) * sp, vy: Math.sin(ang) * sp, life: 60 + Math.random() * 30, max: 90, size: 2.2 * DPR, color: this.rainbow ? this.col() : c, drag: 0.96, grav: 0.05 * DPR, spark: true });
     }
   },
   confetti(n) {
+    n = Math.max(1, Math.round(n * PK));
     const W = this.canvas.width;
     for (let i = 0; i < n; i++) {
       this.parts.push({ x: Math.random() * W, y: -20, vx: (Math.random() - 0.5) * 3, vy: (2 + Math.random() * 3) * DPR, life: 400, max: 400, size: (4 + Math.random() * 5) * DPR, color: `hsl(${Math.random() * 360},100%,62%)`, rot: Math.random() * 6, vr: (Math.random() - 0.5) * 0.3, confetti: true });
@@ -990,6 +998,15 @@ function showSummary() {
   };
 }
 
+// Called by the Android app's Back button. Returns true if it handled it.
+window.androidBack = function () {
+  if (G.phase !== 'idle') { if (G.results.length > 1) finishPull(); else if (G.phase === 'build') reveal(); else finishPull(); return true; }
+  if (!$('#modal').classList.contains('hidden')) { closeModal(null); return true; }
+  if (!$('#summary').classList.contains('hidden')) { $('#summary').classList.add('hidden'); return true; }
+  if (view.screen === 'collection') { view.screen = 'home'; render(); return true; }
+  return false;
+};
+
 function initGacha() {
   G.el = $('#gacha');
   G.el.addEventListener('click', (e) => {
@@ -1019,6 +1036,7 @@ function initGacha() {
   fx.init();
   initGacha();
   try {
+    if (LOCAL_MODE) await LocalStore.init();
     const data = await api('GET', '/api/library');
     library = { collections: [], settings: {}, ...data };
     library.collections.forEach((c) => { c.categories = c.categories || []; c.categories.forEach((k) => { k.entries = k.entries || []; }); });
