@@ -1,0 +1,41 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Randomizer</title>
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+<div id="app"></div>
+
+<!-- Gacha overlay -->
+<div id="gacha" class="gacha hidden" aria-live="polite">
+  <canvas id="fx"></canvas>
+  <div class="g-rays"></div>
+  <div class="g-flash"></div>
+  <div class="g-top">
+    <div class="g-progress"></div>
+    <button class="g-skip btn ghost">Skip to results ⏭</button>
+  </div>
+  <div class="g-stage">
+    <div class="g-orb"><div class="g-orb-core"></div><div class="g-orb-ring"></div><div class="g-orb-ring r2"></div></div>
+    <div class="g-card hidden"></div>
+  </div>
+  <div class="g-hint">Click to reveal</div>
+  <div class="g-actions hidden">
+    <button class="btn claim-btn g-claim">☆ Claim</button>
+    <button class="btn primary g-next">Next ▶</button>
+  </div>
+</div>
+
+<!-- Summary overlay -->
+<div id="summary" class="summary hidden"></div>
+
+<!-- Modal -->
+<div id="modal" class="modal-wrap hidden"><div class="modal"></div></div>
+<div id="toasts"></div>
+
+<script src="app.js"></script>
+</body>
+</html>
